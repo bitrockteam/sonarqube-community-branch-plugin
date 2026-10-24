@@ -1,0 +1,127 @@
+# Bitrock fork release pipeline.
+#
+# Upstream releases through the Gradle release plugin from master, which this
+# fork does not use: each supported SonarQube version lives on its own
+# bitrock/<sq-version> branch built from the matching upstream PR. Pushing a
+# tag equal to gradle.properties' version builds the plugin jar and the
+# patched webapp and publishes them as a GitHub release with the same asset
+# names upstream uses, so consumers only need to change the download base URL.
+name: bitrock-release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v6
+      -
+        name: Tag must match gradle.properties version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(grep '^version=' gradle.properties | cut -d'=' -f2)
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match gradle.properties version $VERSION"
+            exit 1
+          fi
+
+  plugin:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v6
+      -
+        name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          java-package: jdk
+          distribution: 'zulu'
+      -
+        name: Build and test
+        run: ./gradlew clean build
+      -
+        name: Archive artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugin
+          path: build/libs/sonarqube-community-branch-plugin-${{ github.ref_name }}.jar
+          if-no-files-found: error
+
+  webapp:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+      -
+        name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'yarn'
+          cache-dependency-path: sonarqube-webapp/yarn.lock
+      -
+        name: Set up symlink
+        run: ./sonarqube-webapp-addons/setup.sh
+      -
+        name: Install dependencies
+        working-directory: sonarqube-webapp
+        run: yarn install --no-immutable
+      -
+        name: Build frontend
+        working-directory: sonarqube-webapp
+        run: yarn nx run sq-server:build
+      -
+        name: Create build artifact
+        working-directory: sonarqube-webapp/apps/sq-server/build/webapp
+        run: zip -r "${GITHUB_WORKSPACE}/sonarqube-webapp.zip" ./*
+      -
+        name: Archive artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: webapp
+          path: sonarqube-webapp.zip
+          if-no-files-found: error
+
+  release:
+    needs: [plugin, webapp]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      -
+        name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      -
+        name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+      -
+        name: GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          files: |
+            dist/sonarqube-community-branch-plugin-${{ github.ref_name }}.jar
+            dist/sonarqube-webapp.zip
+            dist/SHA256SUMS

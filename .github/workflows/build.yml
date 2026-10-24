@@ -116,7 +116,7 @@ jobs:
 
   release:
     needs: [prep, build-ui]
-    if: github.event_name != 'pull_request' && needs.prep.outputs.release == 'true'
+    if: github.repository == 'mc1arke/sonarqube-community-branch-plugin' && github.event_name != 'pull_request' && needs.prep.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
       -
@@ -185,6 +185,7 @@ jobs:
 
   sonar:
     needs: prep
+    if: github.repository == 'mc1arke/sonarqube-community-branch-plugin'
     runs-on: ubuntu-latest
     steps:
       -
